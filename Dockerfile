@@ -2,75 +2,98 @@
 # When updating this file, please also update virtualization/Docker/Dockerfile.dev
 # This way, the development image and the production image are kept in sync.
 
-FROM python:3.6
+FROM nvidia/cuda:9.2-cudnn7-devel
 LABEL maintainer="Paulus Schoutsen <Paulus@PaulusSchoutsen.nl>"
 
-############# nvidia cuda/cuDNN #################
-##### cuda-base
+############# python #################
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates apt-transport-https gnupg-curl && \
-    rm -rf /var/lib/apt/lists/* && \
-    NVIDIA_GPGKEY_SUM=d1be581509378368edeec8c1eb2958702feedf3bc3d17011adbf24efacce4ab5 && \
-    NVIDIA_GPGKEY_FPR=ae09fe4bbd223a84b2ccfce3f60f4b3d7fa2af80 && \
-    apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/7fa2af80.pub && \
-    apt-key adv --export --no-emit-version -a $NVIDIA_GPGKEY_FPR | tail -n +5 > cudasign.pub && \
-    echo "$NVIDIA_GPGKEY_SUM  cudasign.pub" | sha256sum -c --strict - && rm cudasign.pub && \
-    echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64 /" > /etc/apt/sources.list.d/cuda.list && \
-    echo "deb https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1604/x86_64 /" > /etc/apt/sources.list.d/nvidia-ml.list
+# ensure local python is preferred over distribution python
+ENV PATH /usr/local/bin:$PATH
 
-ENV CUDA_VERSION 9.2.88
+# http://bugs.python.org/issue19846
+# > At the moment, setting "LANG=C" on a Linux system *fundamentally breaks Python 3*, and that's not OK.
+ENV LANG C.UTF-8
 
-ENV CUDA_PKG_VERSION 9-2=$CUDA_VERSION-1
+# runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        cuda-cudart-$CUDA_PKG_VERSION && \
-    ln -s cuda-9.2 /usr/local/cuda && \
-    rm -rf /var/lib/apt/lists/*
+		tcl \
+		tk \
+	&& rm -rf /var/lib/apt/lists/*
 
-# nvidia-docker 1.0
-LABEL com.nvidia.volumes.needed="nvidia_driver"
-LABEL com.nvidia.cuda.version="${CUDA_VERSION}"
+ENV GPG_KEY 0D96DF4D4110E5C43FBFB17F2D347EA6AA65421D
+ENV PYTHON_VERSION 3.6.5
 
-RUN echo "/usr/local/nvidia/lib" >> /etc/ld.so.conf.d/nvidia.conf && \
-    echo "/usr/local/nvidia/lib64" >> /etc/ld.so.conf.d/nvidia.conf
+RUN set -ex \
+	&& buildDeps=' \
+		dpkg-dev \
+		tcl-dev \
+		tk-dev \
+	' \
+	&& apt-get update && apt-get install -y $buildDeps --no-install-recommends && rm -rf /var/lib/apt/lists/* \
+	\
+	&& wget -O python.tar.xz "https://www.python.org/ftp/python/${PYTHON_VERSION%%[a-z]*}/Python-$PYTHON_VERSION.tar.xz" \
+	&& wget -O python.tar.xz.asc "https://www.python.org/ftp/python/${PYTHON_VERSION%%[a-z]*}/Python-$PYTHON_VERSION.tar.xz.asc" \
+	&& export GNUPGHOME="$(mktemp -d)" \
+	&& gpg --keyserver ha.pool.sks-keyservers.net --recv-keys "$GPG_KEY" \
+	&& gpg --batch --verify python.tar.xz.asc python.tar.xz \
+	&& rm -rf "$GNUPGHOME" python.tar.xz.asc \
+	&& mkdir -p /usr/src/python \
+	&& tar -xJC /usr/src/python --strip-components=1 -f python.tar.xz \
+	&& rm python.tar.xz \
+	\
+	&& cd /usr/src/python \
+	&& gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)" \
+	&& ./configure \
+		--build="$gnuArch" \
+		--enable-loadable-sqlite-extensions \
+		--enable-shared \
+		--with-system-expat \
+		--with-system-ffi \
+		--without-ensurepip \
+	&& make -j "$(nproc)" \
+	&& make install \
+	&& ldconfig \
+	\
+	&& apt-get purge -y --auto-remove $buildDeps \
+	\
+	&& find /usr/local -depth \
+		\( \
+			\( -type d -a \( -name test -o -name tests \) \) \
+			-o \
+			\( -type f -a \( -name '*.pyc' -o -name '*.pyo' \) \) \
+		\) -exec rm -rf '{}' + \
+	&& rm -rf /usr/src/python
 
-ENV PATH /usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
-ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64
+# make some useful symlinks that are expected to exist
+RUN cd /usr/local/bin \
+	&& ln -s idle3 idle \
+	&& ln -s pydoc3 pydoc \
+	&& ln -s python3 python \
+	&& ln -s python3-config python-config
 
-# nvidia-container-runtime
-ENV NVIDIA_VISIBLE_DEVICES all
-ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
-ENV NVIDIA_REQUIRE_CUDA "cuda>=9.2"
+# if this is called "PIP_VERSION", pip explodes with "ValueError: invalid truth value '<VERSION>'"
+ENV PYTHON_PIP_VERSION 10.0.1
 
-##### cuda-runtime
-ENV NCCL_VERSION 2.2.12
+RUN set -ex; \
+	\
+	wget -O get-pip.py 'https://bootstrap.pypa.io/get-pip.py'; \
+	\
+	python get-pip.py \
+		--disable-pip-version-check \
+		--no-cache-dir \
+		"pip==$PYTHON_PIP_VERSION" \
+	; \
+	pip --version; \
+	\
+	find /usr/local -depth \
+		\( \
+			\( -type d -a \( -name test -o -name tests \) \) \
+			-o \
+			\( -type f -a \( -name '*.pyc' -o -name '*.pyo' \) \) \
+		\) -exec rm -rf '{}' +; \
+	rm -f get-pip.py
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        cuda-libraries-$CUDA_PKG_VERSION \
-        cuda-nvtx-$CUDA_PKG_VERSION \
-        libnccl2=$NCCL_VERSION-1+cuda9.2 && \
-    rm -rf /var/lib/apt/lists/*
-
-##### 9.2-devel
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        cuda-libraries-dev-$CUDA_PKG_VERSION \
-        cuda-nvml-dev-$CUDA_PKG_VERSION \
-        cuda-minimal-build-$CUDA_PKG_VERSION \
-        cuda-command-line-tools-$CUDA_PKG_VERSION \
-        libnccl-dev=$NCCL_VERSION-1+cuda9.2 && \
-    rm -rf /var/lib/apt/lists/*
-
-ENV LIBRARY_PATH /usr/local/cuda/lib64/stubs
-
-##### cuda-dnn7-devel
-ENV CUDNN_VERSION 7.1.4.18
-LABEL com.nvidia.cudnn.version="${CUDNN_VERSION}"
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-            libcudnn7=$CUDNN_VERSION-1+cuda9.2 \
-            libcudnn7-dev=$CUDNN_VERSION-1+cuda9.2 && \
-    rm -rf /var/lib/apt/lists/*
-
-############# nvidia cuda/cuDNN #################
+############# python #################
 
 
 # Uncomment any of the following lines to disable the installation.
