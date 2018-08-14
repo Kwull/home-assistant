@@ -98,6 +98,9 @@ class DeconzLight(Light):
     @property
     def color_temp(self):
         """Return the CT color value."""
+        if self._light.colormode != 'ct':
+            return None
+
         return self._light.ct
 
     @property
@@ -174,7 +177,7 @@ class DeconzLight(Light):
         data = {'on': False}
 
         if ATTR_TRANSITION in kwargs:
-            data = {'bri': 0}
+            data['bri'] = 0
             data['transitiontime'] = int(kwargs[ATTR_TRANSITION]) * 10
 
         if ATTR_FLASH in kwargs:

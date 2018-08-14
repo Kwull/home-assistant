@@ -40,9 +40,9 @@ REQUIRES = [
     'jinja2>=2.10',
     'pip>=8.0.3',
     'pytz>=2018.04',
-    'pyyaml>=3.11,<4',
+    'pyyaml>=3.13,<4',
     'requests==2.19.1',
-    'voluptuous==0.11.1',
+    'voluptuous==0.11.5',
 ]
 
 MIN_PY_VERSION = '.'.join(map(str, hass_const.REQUIRED_PYTHON_VER))
